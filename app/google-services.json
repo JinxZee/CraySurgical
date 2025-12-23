@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "469195239152",
+    "project_id": "cray-surgicals-1ccbc",
+    "storage_bucket": "cray-surgicals-1ccbc.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:469195239152:android:6ca0d0f8056ff0ed53dc35",
+        "android_client_info": {
+          "package_name": "com.mail.craysurgical"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCYQe52v2Knw6nQZvt3bQTLyX-6Nb7rJks"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
