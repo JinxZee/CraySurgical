@@ -30,9 +30,19 @@ class MainActivity : AppCompatActivity() {
     // ✅ Your cPanel webmail URL
     private val WEBMAIL_URL = "https://craysurgical.com:2096/"
 
-    // ✅ CHANGE THIS to your real site domain where you created:
+    // ✅ Endpoint on your server:
     // public_html/api/save_token.php
     private val TOKEN_ENDPOINT_URL = "https://craysurgical.com/api/save_token.php"
+
+    // ✅ Which mailbox(es) this device is allowed to receive notifications for
+    // Edit this list per device for privacy.
+    // Example: on CEO phone keep only info@..., on sales phone keep only sales@...
+    private val ALLOWED_EMAILS_ON_THIS_DEVICE = listOf(
+        "info@craysurgical.com"
+        // "sales@craysurgical.com",
+        // "sale@craysurgical.com",
+        // "customerservice@craysurgical.com"
+    )
 
     private lateinit var webView: WebView
 
@@ -74,10 +84,10 @@ class MainActivity : AppCompatActivity() {
             if (webView.canGoBack()) webView.goBack() else finish()
         }
 
-        // ✅ Get FCM token and send it to your server (so cron can push notifications)
+        // ✅ Get FCM token and send it + allowed email list to your server
         FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
             android.util.Log.d("FCM_TOKEN", token)
-            sendTokenToServer(token)
+            sendTokenAndEmailsToServer(token, ALLOWED_EMAILS_ON_THIS_DEVICE)
         }
 
         val biometricsEnabled = prefs.getBoolean("biometrics_enabled", false)
@@ -106,7 +116,7 @@ class MainActivity : AppCompatActivity() {
         runCatching { unregisterReceiver(screenReceiver) }
     }
 
-    private fun sendTokenToServer(token: String) {
+    private fun sendTokenAndEmailsToServer(token: String, emails: List<String>) {
         Thread {
             try {
                 val url = java.net.URL(TOKEN_ENDPOINT_URL)
@@ -118,14 +128,19 @@ class MainActivity : AppCompatActivity() {
                     setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
                 }
 
-                val body = "token=" + java.net.URLEncoder.encode(token, "UTF-8")
+                val emailsCsv = emails.joinToString(",")
+
+                val body =
+                    "token=" + java.net.URLEncoder.encode(token, "UTF-8") +
+                            "&emails=" + java.net.URLEncoder.encode(emailsCsv, "UTF-8")
+
                 conn.outputStream.use { it.write(body.toByteArray()) }
 
                 // Trigger the request
                 runCatching { conn.inputStream.use { it.readBytes() } }
                 conn.disconnect()
             } catch (e: Exception) {
-                android.util.Log.e("FCM_TOKEN", "Failed to send token", e)
+                android.util.Log.e("FCM_TOKEN", "Failed to send token+emails", e)
             }
         }.start()
     }
