@@ -24,24 +24,25 @@ import androidx.core.content.ContextCompat
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.firebase.messaging.FirebaseMessaging
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 
 class MainActivity : AppCompatActivity() {
 
     // ✅ Your cPanel webmail URL
     private val WEBMAIL_URL = "https://craysurgical.com:2096/"
 
-    // ✅ Endpoint on your server:
-    // public_html/api/save_token.php
+    // ✅ Your server endpoint (public_html/api/save_token.php)
     private val TOKEN_ENDPOINT_URL = "https://craysurgical.com/api/save_token.php"
 
-    // ✅ Which mailbox(es) this device is allowed to receive notifications for
-    // Edit this list per device for privacy.
-    // Example: on CEO phone keep only info@..., on sales phone keep only sales@...
-    private val ALLOWED_EMAILS_ON_THIS_DEVICE = listOf(
-        "info@craysurgical.com"
-        // "sales@craysurgical.com",
-        // "sale@craysurgical.com",
-        // "customerservice@craysurgical.com"
+    // ✅ Only these accounts will be subscribed from THIS device (privacy)
+    // You can later change this list from a settings screen, but for now it’s fixed.
+    private val EMAILS_USED_ON_THIS_DEVICE = listOf(
+        "info@craysurgical.com",
+        "sale@craysurgical.com",
+        "sales@craysurgical.com",
+        "customerservice@craysurgical.com"
     )
 
     private lateinit var webView: WebView
@@ -64,9 +65,7 @@ class MainActivity : AppCompatActivity() {
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != Intent.ACTION_SCREEN_OFF) return
-            if (isPhoneLocked()) {
-                clearWebViewSession()
-            }
+            if (isPhoneLocked()) clearWebViewSession()
         }
     }
 
@@ -79,16 +78,20 @@ class MainActivity : AppCompatActivity() {
 
         requestNotificationPermissionIfNeeded()
 
-        // ✅ Modern back handling (gesture back friendly)
         onBackPressedDispatcher.addCallback(this) {
             if (webView.canGoBack()) webView.goBack() else finish()
         }
 
-        // ✅ Get FCM token and send it + allowed email list to your server
-        FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
-            android.util.Log.d("FCM_TOKEN", token)
-            sendTokenAndEmailsToServer(token, ALLOWED_EMAILS_ON_THIS_DEVICE)
-        }
+        // ✅ 1) Get FCM token
+        // ✅ 2) Send token + emails list to server (creates tokens_<email>.txt files)
+        FirebaseMessaging.getInstance().token
+            .addOnSuccessListener { token ->
+                android.util.Log.d("FCM_TOKEN", token)
+                sendTokenAndEmailsToServer(token, EMAILS_USED_ON_THIS_DEVICE)
+            }
+            .addOnFailureListener { e ->
+                android.util.Log.e("FCM_TOKEN", "Failed to get FCM token", e)
+            }
 
         val biometricsEnabled = prefs.getBoolean("biometrics_enabled", false)
 
@@ -101,7 +104,6 @@ class MainActivity : AppCompatActivity() {
                 onFailOrCancel = { finish() }
             )
         } else {
-            // First time: user logs in normally on the webpage.
             webView.loadUrl(WEBMAIL_URL)
         }
     }
@@ -116,31 +118,44 @@ class MainActivity : AppCompatActivity() {
         runCatching { unregisterReceiver(screenReceiver) }
     }
 
+    /**
+     * Sends:
+     *  token=<FCM_TOKEN>
+     *  emails=info@...,sale@...,sales@...,customerservice@...
+     */
     private fun sendTokenAndEmailsToServer(token: String, emails: List<String>) {
         Thread {
             try {
-                val url = java.net.URL(TOKEN_ENDPOINT_URL)
-                val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    doOutput = true
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
-                }
-
                 val emailsCsv = emails.joinToString(",")
 
                 val body =
-                    "token=" + java.net.URLEncoder.encode(token, "UTF-8") +
-                            "&emails=" + java.net.URLEncoder.encode(emailsCsv, "UTF-8")
+                    "token=" + URLEncoder.encode(token, "UTF-8") +
+                            "&emails=" + URLEncoder.encode(emailsCsv, "UTF-8")
+
+                val conn = (URL(TOKEN_ENDPOINT_URL).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 15000
+                    readTimeout = 15000
+                    setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
+                    setRequestProperty("Content-Length", body.toByteArray().size.toString())
+                }
 
                 conn.outputStream.use { it.write(body.toByteArray()) }
 
-                // Trigger the request
-                runCatching { conn.inputStream.use { it.readBytes() } }
+                val code = conn.responseCode
+                val responseText = try {
+                    val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                    stream?.bufferedReader()?.use { it.readText() } ?: ""
+                } catch (_: Exception) {
+                    ""
+                }
+
                 conn.disconnect()
+
+                android.util.Log.d("TOKEN_POST", "HTTP=$code response=$responseText")
             } catch (e: Exception) {
-                android.util.Log.e("FCM_TOKEN", "Failed to send token+emails", e)
+                android.util.Log.e("TOKEN_POST", "Failed to send token+emails", e)
             }
         }.start()
     }
@@ -188,11 +203,9 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String) {
                 super.onPageFinished(view, url)
 
-                // ✅ Save cookies using BASE host url (works better for cPanel)
                 val cookies = CookieManager.getInstance().getCookie(baseUrl()).orEmpty()
                 if (cookies.isNotBlank()) {
                     storeCookiesToStorage(cookies)
-                    // Enable biometrics after first successful login
                     prefs.edit().putBoolean("biometrics_enabled", true).apply()
                 }
             }
@@ -212,10 +225,6 @@ class MainActivity : AppCompatActivity() {
 
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     onFailOrCancel()
-                }
-
-                override fun onAuthenticationFailed() {
-                    // user can retry
                 }
             }
         )
@@ -241,11 +250,9 @@ class MainActivity : AppCompatActivity() {
 
         val base = baseUrl()
 
-        // Clear old cookies to avoid stale sessions
         cm.removeAllCookies(null)
         cm.flush()
 
-        // Restore cookies one-by-one (important)
         val cookiePairs = cookies.split("; ")
         for (pair in cookiePairs) {
             cm.setCookie(base, "$pair; Path=/")
